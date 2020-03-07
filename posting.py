@@ -2,8 +2,8 @@
 # from flask_api import status, exceptions
 # import pugsql
 
-import sqlite3, json
-from flask import Flask, jsonify, request, g
+import sqlite3, json, datetime
+from flask import Flask, abort, jsonify, request, g
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,18 +14,18 @@ conn = sqlite3.connect("reddit.db", check_same_thread=False)
 cur = conn.cursor()
 
 cur.execute("""CREATE TABLE IF NOT EXISTS posts(
-    id INT PRIMARY KEY,
-    title STRING,
-    text STRING,
-    community STRING,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title STRING NOT NULL,
+    text STRING NOT NULL,
+    community STRING NOT NULL,
     url STRING DEFAULT NULL,
-    username STRING,
+    username STRING NOT NULL,
     date STRING
 )""")
 
 conn.commit()
 
-# Borrowed make_dicts(), get_db(), close_connection(), and query_db() from https://flask.palletsprojects.com/en/1.1.x/patterns/sqlite3/
+# Borrowed make_dicts(), get_db(), close_connection(), and query_db(), and @app.teardown_appcontext route from https://flask.palletsprojects.com/en/1.1.x/patterns/sqlite3/
 def make_dicts(cursor, row):
     return dict((cursor.description[idx][0], value)
                 for idx, value in enumerate(row))
@@ -37,35 +37,41 @@ def get_db():
         db.row_factory = make_dicts
     return db
 
-@app.teardown_appcontext
-def close_connection(exception):
-    db = getattr(g, '_database', None)
-    if db is not None:
-        db.close()
-
 def query_db(query, args=(), one=False):
     cur = get_db().execute(query, args)
     rv = cur.fetchall()
     cur.close()
     return (rv[0] if rv else None) if one else rv
 
+@app.teardown_appcontext
+def close_connection(exception):
+    db = getattr(g, '_database', None)
+    if db is not None:
+        db.close()
+
+# Borrowed from https://flask.palletsprojects.com/en/1.1.x/patterns/errorpages/
+@app.errorhandler(404)
+def resource_not_found(e):
+    return jsonify(error=str(e)), 404
+
+# Create a new post
 @app.route('/api/v1.0/resources/collections', methods=['POST'])
 def create_post():
-    parameters = request.get_json()
+    parameters = request.get_json(force=True)
 
     title = parameters['title']
     text = parameters['text']
     community = parameters['community']
     username = parameters['username']
-    date = parameters['date']
+    date = datetime.date.today() # use of datetime module in order to prevent incorrect date from user input
 
-    if len(parameters.keys()) == 5:
+    if len(parameters.keys()) == 4:
 
         query = "INSERT INTO posts (title, text, community, url, username, date) VALUES (?, ?, ?, ?, ?, ?)"
         cur.execute(query, (title, text, community, None, username, date))
         conn.commit()
     
-    elif len(parameters.keys()) == 6:
+    elif len(parameters.keys()) == 5:
         url = parameters['url']
 
         query = "INSERT INTO posts (title, text, community, url, username, date) VALUES (?, ?, ?, ?, ?, ?)"
@@ -75,57 +81,66 @@ def create_post():
     result = "Created Successfully"
     return jsonify(result), 201
 
-
-
-@app.route('/api/v1.0/resources/collections', methods=['DELETE'])
-def delete_post():
-
-
-# Retrieve n posts from any community
-# @app.route('/api/v1.0/resources/collections/all', methods=['GET'])
-# def allRecentPosts():
-#     n = request.args.get('n', type = int)
-    
-#     query = "SELECT title, community, username FROM posts"
-
-#     cur.execute(query)
-#     results = cur.fetchall()
-
-#     return jsonify(results)
-
-# # Retrieve n posts from a specific community
-# @app.route('/api/v1.0/resources/collections', methods=['GET'])
-# def communityRecentPosts():
-#     n = request.args.get('n', type = int)
-#     community  = request.args.get('community', type = int)
-    
-#     query = "SELECT title, community, username FROM posts WHERE community = {}"
-#     cur.execute(query.format(community))
-#     results = cur.fetchall()
-    
-#     return jsonify(results)
-
-
-# Retrieve an existing post
-@app.route('/api/v1.0/resources/collections', methods=['GET'])
+@app.route('/api/v1.0/resources/collections', methods=['GET', 'DELETE'])
 def retrieve_post():
-    title = request.args.get('title')
-    community = request.args.get('community')
-    username = request.args.get('username')
+    args = request.args.get('rowID')
 
-    print(community)
-    print(title)
-    print(username)
+    # Retrieve an existing post based on id (the primary key)
+    if request.method == 'GET':
+        query = "SELECT title, community, username, date FROM posts WHERE id=?"
 
-    query = ("SELECT * FROM posts WHERE title=? AND community=? AND username=?")
-    args = [title, community, username]
+        result = query_db(query, args)
 
-    result = query_db(query, args, one=False)
+        if len(result) == 0:
+            result = abort(404, description="Resource not found") # return HTTP code 404 if the resource can't be found or the row has already been deleted
+
+            return jsonify(result)
+
+        return jsonify(result)
+
+    # Delete an existing post based on id (the primary key)
+    if request.method == 'DELETE':
+        query = "DELETE FROM posts WHERE id=?"
+        cur.execute(query, args)
+        conn.commit()
+
+        return "The post has been deleted"
+
+# Retrieve the n most recent posts from a particular community
+@app.route('/api/v1.0/resources/collections/recent', methods=['GET'])
+def retrieve_community_posts():
+    args = request.args.get('community')
+    amount = request.args.get('amount')
+
+    query = "SELECT title, community, username, date FROM posts WHERE community=? ORDER BY id LIMIT ?"
+
+    result = query_db(query, (args, amount))
+
+    if len(result) == 0:
+        result = abort(404, description="Resource not found")
+        return jsonify(result)
+
+    # There are not that many amount of posts
+    if len(result) < int(amount): 
+        result = abort(404, description="Resource not found")
+        return jsonify(result)
 
     return jsonify(result)
 
+# Retrieve the n most recent posts from any community
+@app.route('/api/v1.0/resources/collections/all', methods=['GET'])
+def retrieve_all_posts():
+    amount = request.args.get('amount')
 
+    query = "SELECT title, community, username, date FROM posts LIMIT ?"
+    
+    result = query_db(query, (amount,))
 
+    if len(result) < int(amount):
+        result = abort(404, description="Resource not found")
+        return jsonify(result)
+
+    return jsonify(result)
 
 if __name__ == '__main__':
     app.run(debug=True)
