@@ -1,7 +1,3 @@
-# import flask_api
-# from flask_api import status, exceptions
-# import pugsql
-
 import sqlite3, json, datetime
 from flask import Flask, abort, jsonify, request, g
 from dotenv import load_dotenv
@@ -9,21 +5,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+app.config.from_envvar('APP_CONFIG')
 
-conn = sqlite3.connect("reddit.db", check_same_thread=False)
+conn = sqlite3.connect(app.config['DATABASE'], check_same_thread=False)
 cur = conn.cursor()
 
-cur.execute("""CREATE TABLE IF NOT EXISTS posts(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title STRING NOT NULL,
-    text STRING NOT NULL,
-    community STRING NOT NULL,
-    url STRING DEFAULT NULL,
-    username STRING NOT NULL,
-    date STRING
-)""")
-
-conn.commit()
+@app.cli.command('init')
+def init_db():
+    with app.app_context():
+        db = get_db()
+        with app.open_resource('reddit.sql', mode='r') as f:
+            db.cursor().executescript(f.read())
+        db.commit()
 
 # Borrowed make_dicts(), get_db(), close_connection(), and query_db(), and @app.teardown_appcontext route from https://flask.palletsprojects.com/en/1.1.x/patterns/sqlite3/
 def make_dicts(cursor, row):
@@ -33,7 +26,7 @@ def make_dicts(cursor, row):
 def get_db():
     db = getattr(g, '_database', None)
     if db is None:
-        db = g._database = sqlite3.connect("reddit.db")
+        db = g._database = sqlite3.connect(app.config['DATABASE'])
         db.row_factory = make_dicts
     return db
 
@@ -70,6 +63,10 @@ def create_post():
         query = "INSERT INTO posts (title, text, community, url, username, date) VALUES (?, ?, ?, ?, ?, ?)"
         cur.execute(query, (title, text, community, None, username, date))
         conn.commit()
+
+        query2 = "SELECT id FROM posts WHERE title=? AND text=? AND community=? AND url=? AND username=? AND date=?"
+        postID = query_db(query2, (title, text, community, None, username, date))
+        print(postID)
     
     elif len(parameters.keys()) == 5:
         url = parameters['url']
@@ -78,8 +75,13 @@ def create_post():
         cur.execute(query, (title, text, community, url, username, date))
         conn.commit()
 
-    result = "Created Successfully"
-    return jsonify(result), 201
+        query2 = "SELECT id FROM posts WHERE title=? AND text=? AND community=? AND url=? AND username=? AND date=?"
+        postID = query_db(query2, (title, text, community, url, username, date))
+        print(postID)
+
+    location = f"/api/v1.0/resources/collections/{postID}"
+    result = {'msg': 'Created Successfully'}
+    return jsonify(result), 201, {'Location': location}
 
 @app.route('/api/v1.0/resources/collections', methods=['GET', 'DELETE'])
 def retrieve_post():
@@ -100,11 +102,22 @@ def retrieve_post():
 
     # Delete an existing post based on id (the primary key)
     if request.method == 'DELETE':
-        query = "DELETE FROM posts WHERE id=?"
-        cur.execute(query, args)
-        conn.commit()
+        query = "SELECT title, community, username, date FROM posts WHERE id=?"
 
-        return "The post has been deleted"
+        result = query_db(query, args)
+
+        if len(result) == 0:
+            result = abort(404, description="Resource not found")
+
+            return jsonify(result)
+
+        else:
+            query = "DELETE FROM posts WHERE id=?"
+            cur.execute(query, args)
+            conn.commit()
+
+            msg = {'msg': 'The post has been deleted'}
+            return jsonify(msg)
 
 # Retrieve the n most recent posts from a particular community
 @app.route('/api/v1.0/resources/collections/recent', methods=['GET'])
