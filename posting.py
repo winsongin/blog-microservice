@@ -64,9 +64,8 @@ def create_post():
         cur.execute(query, (title, text, community, None, username, date))
         conn.commit()
 
-        query2 = "SELECT id FROM posts WHERE title=? AND text=? AND community=? AND url=? AND username=? AND date=?"
-        postID = query_db(query2, (title, text, community, None, username, date))
-        print(postID)
+        query2 = "SELECT id FROM posts WHERE title=? AND text=? AND community=? AND username=? AND date=?"
+        postID = query_db(query2, (title, text, community, username, date))
     
     elif len(parameters.keys()) == 5:
         url = parameters['url']
@@ -77,9 +76,8 @@ def create_post():
 
         query2 = "SELECT id FROM posts WHERE title=? AND text=? AND community=? AND url=? AND username=? AND date=?"
         postID = query_db(query2, (title, text, community, url, username, date))
-        print(postID)
 
-    location = f"/api/v1.0/resources/collections/{postID}"
+    location = f"/api/v1.0/resources/collections/{postID[0]['id']}"
     result = {'msg': 'Created Successfully'}
     return jsonify(result), 201, {'Location': location}
 
