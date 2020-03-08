@@ -1,4 +1,4 @@
-# blog-microservice
+# Reddit Post Microservice
 
 ## Prerequisites 
 * Make sure that Flask is installed. If it is not, enter the following command: **pip3 install Flask**
