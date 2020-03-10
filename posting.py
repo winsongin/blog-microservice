@@ -47,6 +47,11 @@ def close_connection(exception):
 def resource_not_found(e):
     return jsonify(error=str(e)), 404
 
+# Home page
+@app.route('/', methods=['GET'])
+def home():
+    return '''<h1>Welcome to the Home Page of the Posting Microservice.</p>'''
+
 # Create a new post
 @app.route('/api/v1.0/resources/collections', methods=['POST'])
 def create_post():
